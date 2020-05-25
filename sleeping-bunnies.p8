@@ -7,6 +7,7 @@ function _init()
   gameover = false
   io_lock_duration = 30*4
   io_lock_tick = io_lock_duration
+  debug = 0
   init_menu()
 end
 function _update()
@@ -33,6 +34,7 @@ function _draw()
   else
     draw_gameover()
   end
+  print(debug, 3,3, 6)
 end
 function start_game()
   play_bg_music(isMusic)
@@ -198,9 +200,15 @@ function init_sim()
   all_food = {}
   spawners = foodtiles()
   foreach(spawners, spawn_food)
+
+  -- pathfinding tools
+  path_init_heatmap()
+  gen_heatmap(8,8)
 end
 
 function update_sim()
+  local src = ent_tile(rabbit)
+  gen_heatmap(src.x, src.y)
   -- game over check
   if (not rabbit.alive or ((not buns[1].alive) and (not buns[2].alive) and (not buns[3].alive))) then
     end_sim()
@@ -346,18 +354,22 @@ function update_sim()
     if (ent_dist(rabbit, fox) <= fox.aradius) then
       fox.state = "alert"
     end
+    fox_move_patrol()
   elseif (fox.state == "alert") then
     if (ent_dist(rabbit, fox) > fox.aradius) then
       fox.state = "idle"
     elseif (not rabbit.hidden) then
+      fox.target = {x=rabbit.x, y=rabbit.y}
       if (ent_dist(rabbit, fox) <= fox.cradius) then
         fox.state = "chase"
       end
     end
+    fox_move_search()
   elseif (fox.state == "chase") then
     if (rabbit.hidden) then
       fox.state = "alert"
     end
+    fox_move_chase()
   end
   if (fox.anim_state == "idle") then
     ent_anim_idle(fox)
@@ -400,6 +412,7 @@ function draw_sim()
   if (not home) then
     map(32,0, 0,0, 16,16, 0x80)
   end
+  path_print_heatmap()
 end
 function end_sim() -- trigger gameover
   play_bg_music(false)
@@ -455,6 +468,15 @@ function rabbit_change_hidden_state(_state)
   if (_state) then sfx(3)
   else sfx(4) end
 end
+function fox_move_patrol()
+  --
+end
+function fox_move_search()
+  --
+end
+function fox_move_chase()
+  --
+end
 function cgrass(o)
   -- check "tall grass" tile collision
   local offset = 4
@@ -494,8 +516,8 @@ function cmap(o)
 end
 function foodtiles()
   local _list = {}
-  for _y=1,16 do -- rows
-    for _x=1,16 do -- cols
+  for _y=0,15 do -- rows
+    for _x=0,15 do -- cols
       if (fget(mget(_x,_y),1)) then
         add(_list, {x=_x*8, y=_y*8})
       end
@@ -509,6 +531,12 @@ function ent_dist(a, b)
   local y1=a.y+4
   local y2=b.y+4
   return sqrt((x2 - x1)^2 + (y2 - y1)^2)
+end
+function ent_tile(ent)
+  local cel = {}
+  cel.x = flr((ent.x+4)/8) + 1
+  cel.y = flr((ent.y+4)/8) + 1
+  return cel
 end
 -->8
 function init_menu()
@@ -714,6 +742,120 @@ function draw_ui()
   end
 
 end
+-->8
+-- pathfinding: flow field fun
+function graph_get_neighbors(_node)
+  local _list = {}
+  local _celx = _node.celx
+  local _cely = _node.cely
+  -- top
+  if (_cely-1 >= 1) then
+    add(_list, {celx=_celx, cely=_cely-1})
+  end
+  -- top right
+  if ((_cely-1 >= 1) and (_celx+1 <= 16)) then
+    add(_list, {celx=_celx+1, cely=_cely-1})
+  end
+  -- right
+  if (_celx+1 <= 16) then
+    add(_list, {celx=_celx+1, cely=_cely})
+  end
+  -- bottom right
+  if ((_cely+1 <= 16) and (_celx+1 <= 16)) then
+    add(_list, {celx=_celx+1, cely=_cely+1})
+  end
+  -- bottom
+  if (_cely+1 <= 16) then
+    add(_list, {celx=_celx, cely=_cely+1})
+  end
+  -- bottom left
+  if ((_cely+1 <= 16) and (_celx-1 >= 1)) then
+    add(_list, {celx=_celx-1, cely=_cely+1})
+  end
+  -- left
+  if (_celx-1 >= 1) then
+    add(_list, {celx=_celx-1, cely=_cely})
+  end
+  -- top left
+  if ((_cely-1 >= 1) and (_celx-1 >= 1)) then
+    add(_list, {celx=_celx-1, cely=_cely-1})
+  end
+  return _list
+end
+function graph_bfs(_node)
+  local dirty = {}
+  for i=1,16 do
+    dirty[i] = {}
+    for j=1,16 do
+      dirty[i][j] = true
+    end
+  end
+  local _queue = {}
+  local _depth = 0
+  _node.depth = _depth + 1
+  add(_queue, _node) -- enqueue source
+  dirty[_node.celx][_node.cely] = false -- mark visited
+  path_heatmap[_node.celx][_node.cely] = _depth -- set distance value
+  while (#_queue >= 1) do
+    -- dequeue next node
+    local _n = _queue[1]
+    del(_queue, _n)
+    -- increase depth ?
+    if (_n.depth > _depth) then
+      _depth = _depth + 1
+    end
+    -- process all neighbors
+    local nbs = graph_get_neighbors(_n)
+    if (#nbs > debug) then debug = #nbs end
+    for i=1,#nbs do
+      local n = nbs[i]
+      -- if not visited
+      if (dirty[n.celx][n.cely]) then
+        -- enqueue node
+        n.depth = _depth + 1
+        add(_queue, n)
+        -- mark as visited
+        dirty[n.celx][n.cely] = false
+        -- set distance value
+        if (path_heatmap[n.celx][n.cely] != 256) then -- if not impassable
+          path_heatmap[n.celx][n.cely] = _depth
+        end
+      end
+    end
+    _depth = _depth + 1
+  end
+
+end
+function path_init_heatmap()
+  path_heatmap = {}
+  for i=1,16 do
+    path_heatmap[i] = {}
+    for j=1,16 do
+      if (fget(mget(i-1,j-1), 0)) then -- collision tile
+        path_heatmap[i][j] = 256
+      else
+        path_heatmap[i][j] = 9
+      end
+    end
+  end
+end
+function path_print_heatmap()
+  for i=1,16 do
+    for j=1,16 do
+      print(path_heatmap[i][j], (i-1)*8, (j-1)*8)
+    end
+  end
+end
+-- heatmap
+function gen_heatmap(_celx, _cely)
+  -- init goal
+  graph_bfs({celx=_celx, cely=_cely})
+  --local open_list = {{celx=_celx, cely=_cely}} 
+  --graph_get_neighbors(_celx, _cely)
+end
+-- vector field
+-- navigate
+
 __gfx__
 f67f00000067f00000000000000000000067f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 f67f0000067f00000067700000677000067f00000067700077777000000550000006600000055000000550000005500000055000000550000005500000055000
@@ -783,9 +925,9 @@ __gff__
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040404040004080808080808080808080808081408000808080818080818000000200000000004080808080808080000040404000000000000000000000000000
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 __map__
-505050505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-505050505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-505050505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+605050506050505060505050605050507d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+506050605060506050605060506050607d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+505060505050605050506050505060507d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505050505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d4040407d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505050505050505050505050505050507d7d7d7d7d7d7d527d7d404141427d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 50505050505050505050505050505050527d7d7d527d7d7d7d404141427d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
