@@ -57,4 +57,3 @@ The Rabbit has a temporary ability with a cooldown that let's the player see the
 **Feed**: Button 5 (X, Green)
 
 **Menu**: Button 4 & Button 5 ( Red & Green) at the same time
-
