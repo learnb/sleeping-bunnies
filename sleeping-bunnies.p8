@@ -77,6 +77,7 @@ function draw_gameover()
 end
 -->8
 function init_sim()
+  debug = {}
   score = 0
 
   worldw = 128
@@ -88,6 +89,7 @@ function init_sim()
   sniff_lock = false
 
   reduce_rate = 0.01
+  lastKnowPosition = {x=10, y=15}
 
   home = false
 
@@ -98,7 +100,7 @@ function init_sim()
   rabbit.hp = 100
   rabbit.alive = true
   rabbit.speed = 1
-  rabbit.radius = 4
+  rabbit.radius = 8
   rabbit.hidden = false
   rabbit.sniff = false
 
@@ -194,19 +196,30 @@ function init_sim()
   fox.anim_state = "idle"
   fox.flip = false
 
+  fox.patrol_points = {}
+  add(fox.patrol_points, {x=2,y=2})
+  add(fox.patrol_points, {x=15,y=2})
+  add(fox.patrol_points, {x=8,y=8})
+  fox.target = fox.patrol_points[1]
+  fox.patrol_indx = 1
+
   -- food
   all_food = {}
   spawners = foodtiles()
-  foreach(spawners, spawn_food)
+  --foreach(spawners, spawn_food)
 
   -- pathfinding tools
   path_init_heatmap()
   path_init_field()
+  gen_flow_field(fox.target.x, fox.target.y)
 end
 
 function update_sim()
+  if (not rabbit.hidden) then
+    lastKnowPosition = ent_tile(rabbit)
+  end
   local src = ent_tile(rabbit)
-  gen_flow_field(src.x, src.y)
+  --gen_flow_field(src.x, src.y)
   -- game over check
   if (not rabbit.alive or ((not buns[1].alive) and (not buns[2].alive) and (not buns[3].alive))) then
     end_sim()
@@ -296,8 +309,10 @@ function update_sim()
       end
     end
   end
+  -- food spawning
+  foreach(spawners, timer_food)
   -- fox collision
-  if (ent_dist(rabbit, fox) < rabbit.radius) then
+  if ((ent_dist(rabbit, fox) < rabbit.radius) and (not rabbit.hidden)) then
     -- eaten by fox
     rabbit.alive = false
     --sfx(2)
@@ -306,12 +321,8 @@ function update_sim()
   -- update animation state
   if (moved and rabbit.state == "idle") then
     rabbit_change_anim_state("move")
-    -- TODO REMOVE
-    fox.anim_state = "move"
   elseif (not moved and rabbit.state == "move") then
     rabbit_change_anim_state("idle")
-    -- TODO REMOVE
-    fox.anim_state = "idle"
   end
   if (rabbit.state == "idle") then ent_anim_idle(rabbit) end
   if (rabbit.state == "move") then ent_anim_move(rabbit) end
@@ -351,21 +362,28 @@ function update_sim()
   if (fox.state == "idle") then
     if (ent_dist(rabbit, fox) <= fox.aradius) then
       fox.state = "alert"
+      fox.target = lastKnowPosition
+      gen_flow_field(fox.target.x, fox.target.y)
     end
     fox_move_patrol()
   elseif (fox.state == "alert") then
     if (ent_dist(rabbit, fox) > fox.aradius) then
       fox.state = "idle"
+      fox.target = fox.patrol_points[fox.patrol_indx]
+      gen_flow_field(fox.target.x, fox.target.y)
     elseif (not rabbit.hidden) then
-      fox.target = {x=rabbit.x, y=rabbit.y}
       if (ent_dist(rabbit, fox) <= fox.cradius) then
         fox.state = "chase"
+        fox.target = lastKnowPosition
+        gen_flow_field(fox.target.x, fox.target.y)
       end
     end
     fox_move_search()
   elseif (fox.state == "chase") then
     if (rabbit.hidden) then
       fox.state = "alert"
+      fox.target = lastKnowPosition
+      gen_flow_field(fox.target.x, fox.target.y)
     end
     fox_move_chase()
   end
@@ -431,6 +449,8 @@ function rabbit_feed(bun)
   end
 end
 function rabbit_consume(fud)
+  sfx(13)
+  reset_food_timer(fud.x, fud.y)
   del(all_food, fud)
   rabbit.hp = rabbit.hp + 20
   if (rabbit.hp > 100) then rabbit.hp = 100 end
@@ -438,13 +458,33 @@ end
 function spawn_food(obj)
   local f = {}
   if (obj != nil) then
+    -- spawn
     f = {}
     f.x = obj.x 
     f.y = obj.y 
     f.radius = 6
     f.frame = 1
     f.sprites = {35}
+    f.spawner = obj
     add(all_food, f)
+  end
+end
+function timer_food(obj)
+  if (obj != nil) then
+    if (obj.timer > 0) then
+      obj.timer = obj.timer - 1
+    end
+    if (obj.timer == 0) then 
+      spawn_food(obj)  -- spawn
+      obj.timer = obj.timer - 1
+    end
+  end
+end
+function reset_food_timer(_x, _y)
+  for i=1,#spawners do -- for each spawner
+    if ( (spawners[i].x == _x) and (spawners[i].y == _y) ) then
+      spawners[i].timer = spawners[i].spawn_time
+    end
   end
 end
 function toggle_sniff_state()
@@ -467,17 +507,38 @@ function rabbit_change_hidden_state(_state)
   else sfx(4) end
 end
 function fox_move_patrol()
-  fox_move_flow()
+  if (fox_move_flow(1)) then
+    fox.anim_state = "idle"
+    -- set next target
+    if (fox.patrol_indx+1 <= #fox.patrol_points) then
+      fox.patrol_indx = fox.patrol_indx + 1
+    else
+      fox.patrol_indx = 1
+    end
+    fox.target = fox.patrol_points[fox.patrol_indx]
+    gen_flow_field(fox.target.x, fox.target.y)
+  end
 end
 function fox_move_search()
   --
-  fox_move_flow()
+  if (fox_move_flow(1)) then
+    fox.anim_state = "idle"
+    -- set next target
+    fox.target = lastKnowPosition
+    gen_flow_field(fox.target.x, fox.target.y)
+  end
 end
 function fox_move_chase()
   --
-  fox_move_flow()
+  if (fox_move_flow(2)) then
+    fox.anim_state = "idle"
+    -- set next target
+    fox.target = lastKnowPosition
+    gen_flow_field(fox.target.x, fox.target.y)
+  end
 end
-function fox_move_flow()
+function fox_move_flow(speed)
+  fox.anim_state = "move"
   local _tile = ent_tile(fox)
   local _celx = _tile.x
   local _cely = _tile.y
@@ -487,9 +548,15 @@ function fox_move_flow()
   local _vec = {}
   if (not skip) then
     _vec = path_field[_celx][_cely]
-    fox.x = fox.x + (_vec.x * 1)
-    fox.y = fox.y + (_vec.y * 1)
+    fox.x = fox.x + (_vec.x * speed)
+    fox.y = fox.y + (_vec.y * speed)
+    if (_vec.x >= 1) then fox.flip = true end
+    if (_vec.x <= -1) then fox.flip = false end
+    if (_vec.x == 0 and _vec.y == 0) then -- stuck/complete
+      return true
+    end
   end
+  return false
 end
 function cgrass(o)
   -- check "tall grass" tile collision
@@ -533,7 +600,13 @@ function foodtiles()
   for _y=0,15 do -- rows
     for _x=0,15 do -- cols
       if (fget(mget(_x,_y),1)) then
-        add(_list, {x=_x*8, y=_y*8})
+        local t = {}
+        t.x = _x*8
+        t.y = _y*8
+        t.spawn_time = flr(30*(rnd(20)+10)) -- rng 10 to 30 'seconds'
+        t.timer = flr(t.spawn_time * rnd(1))
+        --add(_list, {x=_x*8, y=_y*8, spawn_time=(30*20), timer=spawn_time})
+        add(_list, t)
       end
     end
   end
@@ -770,6 +843,7 @@ function vec_dist(a, b)
 end
 function vec_norm(_vec)
   local m = vec_mag(_vec)
+  if (m == 0) then return {x=0, y=0} end
   return {x=(_vec.x/m), y=(_vec.y/m)}
 end
 function graph_cardinal_neighbors(_node)
@@ -1114,14 +1188,14 @@ __map__
 50505050505950505050505050505050527d7d7d527d7d7d7d404141427d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505050505059505050505050505050507d7d7d7d7d527d7d7d4242427d7d7d7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505050505059505050505050505050507d7d7d7d7d7d7d7d7d7d7d7d7d537d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-505050505059595950505050505050507d7d7d7d7d7d7d7d537d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+505050505059505050505050505050507d7d7d7d7d7d7d7d537d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505060505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d7d404040407d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 505050505050505050505050505050507d7d7d7d7d7d7d7d7d7d7d40414141417d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 5959595950505050505050595959585a7d7d7d7d7d7d7d7d7d7d407d7d7d41417d7d7d7d7d7d7d7d7d7d7d5252527d7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 5050505950605050505059484949575a7d7d7d7d7d7d7d7d7d7d7d7d7d7d42427d7d7d7d7d7d7d7d7d7d5250515050510000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-5050505959505050505059584669475a7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d5251505150500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-5050505050505050505056575a59585a7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d5250505150510000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-5959595959595959596869696a59686a7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d52525250505051500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+5050505959505050505059584669475a7d7d7d7d7d7d7d7d7d407d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d5251505150500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+5050505050505050505056575a59585a7d7d7d7d7d7d7d7d4041417d7d7d7d7d7d7d7d7d7d7d7d7d7d7d5250505150510000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+5959595959595959596869696a59686a7d7d7d7d7d7d7d7d7d41417d7d7d7d7d7d7d7d7d7d7d7d7d52525250505051500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0000000000000000000000000000000000000000ff000000000000000000007c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 __sfx__
 000100000c050170501705017050180501405019050140501a050280501c050140501d0501e050140501f0502105016050220500c05025050250502605027050270502805029050290501c0502a0502a0502b050
