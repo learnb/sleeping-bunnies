@@ -7,7 +7,6 @@ function _init()
   gameover = false
   io_lock_duration = 30*4
   io_lock_tick = io_lock_duration
-  debug = 0
   init_menu()
 end
 function _update()
@@ -34,7 +33,6 @@ function _draw()
   else
     draw_gameover()
   end
-  print(debug, 3,3, 6)
 end
 function start_game()
   play_bg_music(isMusic)
@@ -412,7 +410,7 @@ function draw_sim()
   if (not home) then
     map(32,0, 0,0, 16,16, 0x80)
   end
-  path_print_field()
+  --path_print_field()
 end
 function end_sim() -- trigger gameover
   play_bg_music(false)
@@ -469,13 +467,29 @@ function rabbit_change_hidden_state(_state)
   else sfx(4) end
 end
 function fox_move_patrol()
-  --
+  fox_move_flow()
 end
 function fox_move_search()
   --
+  fox_move_flow()
 end
 function fox_move_chase()
   --
+  fox_move_flow()
+end
+function fox_move_flow()
+  local _tile = ent_tile(fox)
+  local _celx = _tile.x
+  local _cely = _tile.y
+  local skip = false
+  if (_celx < 1 or _celx > 16) then skip = true end
+  if (_cely < 1 or _cely > 16) then skip = true end
+  local _vec = {}
+  if (not skip) then
+    _vec = path_field[_celx][_cely]
+    fox.x = fox.x + (_vec.x * 1)
+    fox.y = fox.y + (_vec.y * 1)
+  end
 end
 function cgrass(o)
   -- check "tall grass" tile collision
@@ -904,7 +918,6 @@ function graph_bfs(_node)
     end
     -- process all neighbors
     local nbs = graph_get_neighbors(_n)
-    if (#nbs > debug) then debug = #nbs end
     for i=1,#nbs do
       local n = nbs[i]
       -- if not visited
